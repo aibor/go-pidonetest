@@ -5,7 +5,6 @@
 package virtrun
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -75,7 +74,6 @@ func (s *Qemu) addDefaultsFor(arch sys.Arch) error {
 }
 
 func NewQemuCommand(
-	ctx context.Context,
 	cfg Qemu,
 	initramfsPath string,
 ) (*qemu.Command, error) {
@@ -101,7 +99,7 @@ func NewQemuCommand(
 		rewriteGoTestFlagsPath(&cmdSpec)
 	}
 
-	cmd, err := qemu.NewCommand(ctx, cmdSpec)
+	cmd, err := qemu.NewCommand(cmdSpec, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build command: %w", err)
 	}

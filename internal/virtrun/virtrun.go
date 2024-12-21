@@ -52,12 +52,12 @@ func Run(
 	}
 	defer removeFn() //nolint:errcheck
 
-	cmd, err := NewQemuCommand(ctx, spec.Qemu, path)
+	cmd, err := NewQemuCommand(spec.Qemu, path)
 	if err != nil {
 		return err
 	}
 
-	err = cmd.Run(stdin, stdout, stderr)
+	err = cmd.Run(ctx, stdin, stdout, stderr)
 	if err != nil {
 		return fmt.Errorf("qemu run: %w", err)
 	}

@@ -6,7 +6,6 @@ package qemu
 
 import (
 	"context"
-	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,7 +13,7 @@ import (
 	"go.uber.org/goleak"
 )
 
-func TestCommandSpec_Arguments(t *testing.T) {
+func TestCommandSpec_StaticArguments(t *testing.T) {
 	tests := []struct {
 		name   string
 		spec   CommandSpec
@@ -92,10 +91,6 @@ func TestCommandSpec_Arguments(t *testing.T) {
 				RepeatableArg("device", "virtio-serial-device,max_ports=8"),
 				RepeatableArg("chardev", "stdio,id=stdio"),
 				RepeatableArg("device", "virtconsole,chardev=stdio"),
-				RepeatableArg("chardev", "file,id=con0,path=/dev/fd/3"),
-				RepeatableArg("device", "virtconsole,chardev=con0"),
-				RepeatableArg("chardev", "file,id=con1,path=/dev/fd/4"),
-				RepeatableArg("device", "virtconsole,chardev=con1"),
 			},
 			assert: assert.Subset,
 		},
@@ -112,10 +107,6 @@ func TestCommandSpec_Arguments(t *testing.T) {
 				RepeatableArg("device", "virtio-serial-pci,max_ports=8"),
 				RepeatableArg("chardev", "stdio,id=stdio"),
 				RepeatableArg("device", "virtconsole,chardev=stdio"),
-				RepeatableArg("chardev", "file,id=con0,path=/dev/fd/3"),
-				RepeatableArg("device", "virtconsole,chardev=con0"),
-				RepeatableArg("chardev", "file,id=con1,path=/dev/fd/4"),
-				RepeatableArg("device", "virtconsole,chardev=con1"),
 			},
 			assert: assert.Subset,
 		},
@@ -131,10 +122,6 @@ func TestCommandSpec_Arguments(t *testing.T) {
 			expect: []Argument{
 				RepeatableArg("chardev", "stdio,id=stdio"),
 				RepeatableArg("serial", "chardev:stdio"),
-				RepeatableArg("chardev", "file,id=con0,path=/dev/fd/3"),
-				RepeatableArg("serial", "chardev:con0"),
-				RepeatableArg("chardev", "file,id=con1,path=/dev/fd/4"),
-				RepeatableArg("serial", "chardev:con1"),
 			},
 			assert: assert.Subset,
 		},
@@ -142,7 +129,7 @@ func TestCommandSpec_Arguments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.assert(t, tt.spec.arguments(), tt.expect)
+			tt.assert(t, tt.spec.staticArguments(), tt.expect)
 		})
 	}
 }
@@ -171,15 +158,12 @@ func TestNewCommand(t *testing.T) {
 				ExitCodeFmt:        "rrr",
 			},
 			expectedCmd: &Command{
-				cmd: exec.CommandContext(
-					context.Background(),
-					"test",
+				name: "test",
+				args: []string{
 					"-kernel",
 					"-initrd",
 					"-chardev", "stdio,id=stdio",
 					"-serial", "chardev:stdio",
-					"-chardev", "file,id=con0,path=/dev/fd/3",
-					"-serial", "chardev:con0",
 					"-display", "none",
 					"-monitor", "none",
 					"-no-reboot",
@@ -190,12 +174,14 @@ func TestNewCommand(t *testing.T) {
 					"panic=-1",
 					"mitigations=off",
 					"initcall_blacklist=ahci_pci_driver_init",
-				),
+					"-chardev", "socket,id=socket0,path=one,abstract=on",
+					"-serial", "chardev:socket0",
+				},
 				stdoutParser: stdoutParser{
 					ExitCodeFmt: "rrr",
 					Verbose:     true,
 				},
-				consoleOutput: []string{"one"},
+				consoleOutput: map[string]string{"one": "one"},
 			},
 			assertErr: require.NoError,
 		},
@@ -203,7 +189,11 @@ func TestNewCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actual, err := NewCommand(context.Background(), tt.spec)
+			hashFn := func(s string) string {
+				return s
+			}
+
+			actual, err := NewCommand(tt.spec, hashFn)
 			tt.assertErr(t, err)
 
 			if tt.expectedCmd != nil {
@@ -226,25 +216,26 @@ func TestCommand_Run(t *testing.T) {
 		{
 			name: "success no consoles",
 			cmd: Command{
-				cmd: exec.Command("echo", "rc: 0"),
+				name: "echo",
+				args: []string{"rc: 0"},
 				stdoutParser: stdoutParser{
 					ExitCodeFmt: "rc: %d",
 				},
 			},
+
 			assertErr: require.NoError,
 		},
 		{
 			name: "success with consoles",
 			cmd: Command{
-				cmd: exec.Command("echo", "rc: 0"),
+				name: "echo",
+				args: []string{"rc: 0"},
 				stdoutParser: stdoutParser{
 					ExitCodeFmt: "rc: %d",
 				},
-				consoleOutput: []string{
-					tempDir + "/out1",
-					tempDir + "/out2",
-					tempDir + "/out3",
-					tempDir + "/out4",
+				consoleOutput: map[string]string{
+					"test-1-1": tempDir + "/out1",
+					"test-1-2": tempDir + "/out2",
 				},
 			},
 			assertErr: require.NoError,
@@ -252,15 +243,14 @@ func TestCommand_Run(t *testing.T) {
 		{
 			name: "fail with consoles",
 			cmd: Command{
-				cmd: exec.Command("echo", "rc: 42"),
+				name: "echo",
+				args: []string{"rc: 42"},
 				stdoutParser: stdoutParser{
 					ExitCodeFmt: "rc: %d",
 				},
-				consoleOutput: []string{
-					tempDir + "/out1",
-					tempDir + "/out2",
-					tempDir + "/out3",
-					tempDir + "/out4",
+				consoleOutput: map[string]string{
+					"test-2-1": tempDir + "/out1",
+					"test-2-2": tempDir + "/out2",
 				},
 			},
 			assertErr: func(t require.TestingT, err error, _ ...any) {
@@ -273,12 +263,10 @@ func TestCommand_Run(t *testing.T) {
 		{
 			name: "start error with consoles",
 			cmd: Command{
-				cmd: exec.Command("nonexistingprogramthatdoesnotexistanywhere"),
-				consoleOutput: []string{
-					tempDir + "/out1",
-					tempDir + "/out2",
-					tempDir + "/out3",
-					tempDir + "/out4",
+				name: "nonexistingprogramthatdoesnotexistanywhere",
+				consoleOutput: map[string]string{
+					"test-3-1": tempDir + "/out1",
+					"test-3-2": tempDir + "/out2",
 				},
 			},
 			assertErr: func(t require.TestingT, err error, _ ...any) {
@@ -292,7 +280,7 @@ func TestCommand_Run(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			defer goleak.VerifyNone(t)
 
-			err := tt.cmd.Run(nil, nil, nil)
+			err := tt.cmd.Run(context.Background(), nil, nil, nil)
 			tt.assertErr(t, err)
 		})
 	}
